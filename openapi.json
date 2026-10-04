@@ -1,0 +1,287 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Enterprise Multi-Tenant Auth & API Gateway Service",
+    "version": "1.0.0",
+    "description": "Production-ready, highly secure Multi-Tenant Authentication and API Gateway service featuring RS256 JWT asymmetric cryptography, distributed sliding-window rate limiting via Redis, granular RBAC, dynamic reverse proxying, and comprehensive PostgreSQL audit logs."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:4000",
+      "description": "Local Development Server"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "RS256 Asymmetric Signed JWT Token"
+      }
+    },
+    "schemas": {
+      "RegisterRequest": {
+        "type": "object",
+        "required": ["tenantSlug", "email", "password", "fullName"],
+        "properties": {
+          "tenantSlug": { "type": "string", "example": "acme-corp" },
+          "email": { "type": "string", "format": "email", "example": "dev@acme.com" },
+          "password": { "type": "string", "format": "password", "example": "SecretPass123!" },
+          "fullName": { "type": "string", "example": "Jane Developer" }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": ["email", "password"],
+        "properties": {
+          "email": { "type": "string", "format": "email", "example": "superadmin@acme.com" },
+          "password": { "type": "string", "format": "password", "example": "Password123!" },
+          "tenantSlug": { "type": "string", "example": "acme-corp" }
+        }
+      },
+      "RefreshRequest": {
+        "type": "object",
+        "required": ["refreshToken"],
+        "properties": {
+          "refreshToken": { "type": "string", "example": "7c9e6679f...4f1e" }
+        }
+      },
+      "LogoutRequest": {
+        "type": "object",
+        "properties": {
+          "refreshToken": { "type": "string", "example": "7c9e6679f...4f1e" }
+        }
+      },
+      "AuthResponse": {
+        "type": "object",
+        "properties": {
+          "message": { "type": "string" },
+          "user": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "format": "uuid" },
+              "email": { "type": "string" },
+              "fullName": { "type": "string" },
+              "tenant": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string" },
+                  "name": { "type": "string" },
+                  "slug": { "type": "string" }
+                }
+              },
+              "roles": { "type": "array", "items": { "type": "string" } },
+              "permissions": { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          "tokens": {
+            "type": "object",
+            "properties": {
+              "tokenType": { "type": "string", "example": "Bearer" },
+              "accessToken": { "type": "string" },
+              "refreshToken": { "type": "string" },
+              "expiresIn": { "type": "integer", "example": 900 }
+            }
+          }
+        }
+      },
+      "Tenant": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "name": { "type": "string" },
+          "slug": { "type": "string" },
+          "plan": { "type": "string", "enum": ["starter", "pro", "enterprise"] },
+          "isActive": { "type": "boolean" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "CreateTenantRequest": {
+        "type": "object",
+        "required": ["name", "slug"],
+        "properties": {
+          "name": { "type": "string", "example": "Nexus Robotics" },
+          "slug": { "type": "string", "example": "nexus-robotics" },
+          "plan": { "type": "string", "enum": ["starter", "pro", "enterprise"], "default": "starter" }
+        }
+      },
+      "GatewayRoute": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "pathPrefix": { "type": "string", "example": "/api/v1/echo" },
+          "targetUrl": { "type": "string", "example": "https://postman-echo.com/get" },
+          "isProtected": { "type": "boolean" },
+          "requiredRoles": { "type": "array", "items": { "type": "string" } },
+          "requiredPermissions": { "type": "array", "items": { "type": "string" } },
+          "rateLimitWindowSec": { "type": "integer" },
+          "rateLimitMax": { "type": "integer" },
+          "stripPrefix": { "type": "boolean" },
+          "timeoutMs": { "type": "integer" }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "Authenticate user & issue RS256 JWT tokens",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/LoginRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authenticated successfully",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthResponse" } } }
+          },
+          "401": { "description": "Invalid credentials" }
+        }
+      }
+    },
+    "/api/v1/auth/register": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "Self-register user in tenant organization",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RegisterRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "User created & authenticated" }
+        }
+      }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "Rotate refresh token & issue fresh RS256 access token",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RefreshRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Tokens successfully rotated" },
+          "401": { "description": "Invalid or reused refresh token" }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "Revoke session & blacklist current access token",
+        "security": [{ "BearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/LogoutRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Logged out successfully" }
+        }
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "tags": ["Authentication"],
+        "summary": "Get authenticated user profile and roles",
+        "security": [{ "BearerAuth": [] }],
+        "responses": {
+          "200": { "description": "Profile data retrieved" }
+        }
+      }
+    },
+    "/api/v1/auth/jwks.json": {
+      "get": {
+        "tags": ["Authentication"],
+        "summary": "JSON Web Key Set (JWKS) public keys",
+        "responses": {
+          "200": { "description": "JWKS public keys" }
+        }
+      }
+    },
+    "/api/v1/tenants": {
+      "get": {
+        "tags": ["Tenants"],
+        "summary": "List all organizations (SuperAdmin only)",
+        "security": [{ "BearerAuth": [] }],
+        "responses": {
+          "200": { "description": "List of tenants" }
+        }
+      },
+      "post": {
+        "tags": ["Tenants"],
+        "summary": "Create organization (SuperAdmin only)",
+        "security": [{ "BearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateTenantRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Tenant created" }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/users": {
+      "get": {
+        "tags": ["Tenant Users"],
+        "summary": "List users in tenant",
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          { "name": "tenantId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "User list" }
+        }
+      }
+    },
+    "/api/v1/gateway/routes": {
+      "get": {
+        "tags": ["API Gateway Config"],
+        "summary": "List dynamic proxy upstream routes",
+        "security": [{ "BearerAuth": [] }],
+        "responses": {
+          "200": { "description": "List of routes" }
+        }
+      },
+      "post": {
+        "tags": ["API Gateway Config"],
+        "summary": "Create dynamic proxy route",
+        "security": [{ "BearerAuth": [] }],
+        "responses": {
+          "201": { "description": "Route created" }
+        }
+      }
+    },
+    "/api/v1/audit/logs": {
+      "get": {
+        "tags": ["Audit Logs"],
+        "summary": "Query audit logs with tenant/user/action filters",
+        "security": [{ "BearerAuth": [] }],
+        "responses": {
+          "200": { "description": "Audit trails" }
+        }
+      }
+    }
+  }
+}

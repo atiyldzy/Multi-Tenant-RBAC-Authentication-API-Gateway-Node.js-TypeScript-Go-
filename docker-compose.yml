@@ -1,0 +1,80 @@
+services:
+  # 1. PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: gateway_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: auth_gateway_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d auth_gateway_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. Redis Distributed Store
+  redis:
+    image: redis:7-alpine
+    container_name: gateway_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 3. Enterprise Auth & API Gateway Core Service
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: enterprise_auth_gateway
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      PORT: 4000
+      NODE_ENV: production
+      DATABASE_URL: postgres://postgres:postgrespassword@postgres:5432/auth_gateway_db
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_ISSUER: auth.gateway.enterprise
+      JWT_AUDIENCE: enterprise.api.gateway
+      JWT_ACCESS_EXPIRATION_SECONDS: 900
+      JWT_REFRESH_EXPIRATION_SECONDS: 604800
+      KEY_PATH_PRIVATE: /app/keys/private.pem
+      KEY_PATH_PUBLIC: /app/keys/public.pem
+      RATE_LIMIT_GLOBAL_MAX: 100
+      RATE_LIMIT_GLOBAL_WINDOW_SEC: 60
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - gateway_keys:/app/keys
+
+  # 4. Downstream Mock Microservice (for testing dynamic proxying)
+  downstream-microservice:
+    image: hashicorp/http-echo:latest
+    container_name: downstream_service
+    restart: unless-stopped
+    command: ["-text=Hello from Downstream Microservice! Context verified.", "-listen=:8080"]
+    ports:
+      - "8080:8080"
+
+volumes:
+  postgres_data:
+  redis_data:
+  gateway_keys:
